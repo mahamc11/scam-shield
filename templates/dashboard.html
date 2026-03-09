@@ -1,0 +1,84 @@
+{% extends 'base.html' %}
+{% block content %}
+<div class="dashboard-layout">
+  <section class="card">
+    <h2>Main Scam Detection Dashboard</h2>
+    <form method="post" action="{{ url_for('detect_scam') }}" enctype="multipart/form-data" class="form-grid">
+      <label>Company Name
+        <input type="text" name="company_name" placeholder="e.g., ABC Technologies" required />
+      </label>
+
+      <label>Company Address
+        <input type="text" name="company_address" placeholder="City, Street, Country" required />
+      </label>
+
+      <label>Phone Number
+        <input type="text" name="phone_number" placeholder="Recruiter contact number" required />
+      </label>
+
+      <label>Description (what the recruiter said)
+        <div class="voice-wrap">
+          <textarea name="description" id="descriptionBox" rows="5" placeholder="Type suspicious details here..." required></textarea>
+          <button type="button" id="micBtn" class="mic-btn" title="Speak input">🎤</button>
+        </div>
+      </label>
+
+      <input type="hidden" name="voice_text" id="voiceText" />
+
+      <label>Upload evidence (audio, images, documents)
+        <input type="file" name="evidence_files" multiple />
+      </label>
+
+      <button class="btn" type="submit">Start Detection</button>
+    </form>
+  </section>
+
+  <aside class="chatbot card">
+    <h3>Scam Shield Assistant</h3>
+    <div id="chatWindow" class="chat-window">
+      <div class="bot-msg">Hi! Ask me how to avoid job scams.</div>
+    </div>
+    <div class="chat-input">
+      <input type="text" id="chatInput" placeholder="Ask for scam safety advice..." />
+      <button class="btn small" id="sendChat">Send</button>
+    </div>
+  </aside>
+</div>
+
+{% if result %}
+<section class="card results">
+  <h2>Detection Result: <span class="pill">{{ result.label }}</span></h2>
+  <p><strong>Scam Detection Score:</strong> {{ result.score }}%</p>
+  <h3>Why this result?</h3>
+  <ul>
+    {% for line in result.explanation %}
+      <li>{{ line }}</li>
+    {% endfor %}
+  </ul>
+
+  <h3>Verification Signals</h3>
+  <p><strong>Phone Verification:</strong> {{ result.phone_status }}</p>
+  <p><strong>Company Verification:</strong> {{ result.company_status }}</p>
+  <ul>
+    {% for source, status in result.sources.items() %}
+      <li>{{ source }}: {{ status }}</li>
+    {% endfor %}
+  </ul>
+
+  <div class="chart-grid">
+    <canvas id="probabilityChart"></canvas>
+    <canvas id="riskChart"></canvas>
+    <canvas id="verificationChart"></canvas>
+  </div>
+</section>
+
+<script>
+window.detectionData = {
+  score: {{ result.score }},
+  factors: {{ result.risk_factors | tojson }},
+  phoneStatus: "{{ result.phone_status }}",
+  companyStatus: "{{ result.company_status }}",
+};
+</script>
+{% endif %}
+{% endblock %}

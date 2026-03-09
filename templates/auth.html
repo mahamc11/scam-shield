@@ -1,0 +1,31 @@
+{% extends 'base.html' %}
+{% block content %}
+<section class="auth-card">
+  <h2>{{ 'Create your account' if mode == 'register' else 'Welcome back' }}</h2>
+  <form method="post" class="form-grid">
+    {% if mode == 'register' %}
+      <label>Name
+        <input type="text" name="name" required />
+      </label>
+    {% endif %}
+
+    <label>Email
+      <input type="email" name="email" required />
+    </label>
+
+    <label>Password
+      <input type="password" name="password" required />
+    </label>
+
+    <button class="btn" type="submit">{{ 'Register' if mode == 'register' else 'Login' }}</button>
+  </form>
+
+  <p class="hint">
+    {% if mode == 'register' %}
+      Already registered? <a href="{{ url_for('login') }}">Login here</a>.
+    {% else %}
+      New user? <a href="{{ url_for('register') }}">Create an account</a>.
+    {% endif %}
+  </p>
+</section>
+{% endblock %}
