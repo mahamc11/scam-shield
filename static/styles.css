@@ -49,11 +49,32 @@ input, textarea {
 .user-msg { background: #284c96; text-align: right; }
 .chat-input { display: flex; gap: 8px; }
 .pill { background: #1f2f58; border: 1px solid #35518f; padding: 4px 10px; border-radius: 999px; }
-.chart-grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); margin-top: 16px; }
+.chart-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  margin-top: 16px;
+}
+.chart-card {
+  background: #0e1630;
+  border: 1px solid #263961;
+  border-radius: 12px;
+  padding: 10px;
+  min-height: 250px;
+  height: 260px;
+  overflow: hidden;
+}
+.chart-card canvas {
+  width: 100% !important;
+  height: 100% !important;
+}
 .flash-wrap { margin-bottom: 12px; }
 .flash { padding: 10px 12px; border-radius: 10px; margin-bottom: 8px; }
 .flash.error { background: #552020; }
 .flash.success { background: #154b35; }
 .hint { color: var(--muted); }
 ol li { margin-bottom: 8px; }
-@media (max-width: 900px) { .dashboard-layout { grid-template-columns: 1fr; } }
+@media (max-width: 900px) {
+  .dashboard-layout { grid-template-columns: 1fr; }
+  .chart-card { min-height: 220px; height: 230px; }
+}

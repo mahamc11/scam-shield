@@ -1,5 +1,4 @@
 (function () {
-  // --- Speech to text via Web Speech API ---
   const micBtn = document.getElementById("micBtn");
   const descriptionBox = document.getElementById("descriptionBox");
   const voiceText = document.getElementById("voiceText");
@@ -30,7 +29,6 @@
     };
   }
 
-  // --- Chatbot ---
   const chatWindow = document.getElementById("chatWindow");
   const chatInput = document.getElementById("chatInput");
   const sendChat = document.getElementById("sendChat");
@@ -67,9 +65,15 @@
     });
   }
 
-  // --- Analytics charts ---
   if (window.detectionData && window.Chart) {
     const { score, factors, phoneStatus, companyStatus } = window.detectionData;
+    const baseOptions = {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { labels: { color: "#edf2ff" } },
+      },
+    };
 
     const probabilityCtx = document.getElementById("probabilityChart");
     if (probabilityCtx) {
@@ -80,8 +84,10 @@
           datasets: [{
             data: [score, 100 - score],
             backgroundColor: ["#ff6b6b", "#63e6be"],
+            borderWidth: 1,
           }],
         },
+        options: baseOptions,
       });
     }
 
@@ -92,10 +98,18 @@
         data: {
           labels: Object.keys(factors),
           datasets: [{
-            label: "Risk Factors Detected",
+            label: "Risk Factors",
             data: Object.values(factors),
             backgroundColor: "#5b8cff",
+            borderRadius: 6,
           }],
+        },
+        options: {
+          ...baseOptions,
+          scales: {
+            x: { ticks: { color: "#dce5ff", maxRotation: 20, minRotation: 0 } },
+            y: { beginAtZero: true, max: 70, ticks: { color: "#dce5ff" } },
+          },
         },
       });
     }
@@ -111,9 +125,13 @@
             data: [phoneStatus === "Verified" ? 90 : 35, companyStatus === "Verified" ? 90 : 40],
             backgroundColor: "rgba(99, 230, 190, 0.3)",
             borderColor: "#63e6be",
+            borderWidth: 2,
           }],
         },
-        options: { scales: { r: { suggestedMin: 0, suggestedMax: 100 } } },
+        options: {
+          ...baseOptions,
+          scales: { r: { suggestedMin: 0, suggestedMax: 100, angleLines: { color: "#345" }, grid: { color: "#345" }, pointLabels: { color: "#dce5ff" }, ticks: { color: "#dce5ff", backdropColor: "transparent" } } },
+        },
       });
     }
   }

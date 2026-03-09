@@ -202,6 +202,38 @@ def analyze_text_signals(text: str):
     return min(score, 70), factors
 
 
+def analyze_legitimacy_signals(text: str, company_name: str):
+    """Find positive trust indicators to reduce false positives."""
+    lower = normalize_text(text)
+    score = 0
+    notes = []
+
+    positive_phrases = [
+        "official website", "career page", "linkedin company page", "glassdoor reviews",
+        "formal interview", "hr round", "technical round", "offer letter on company letterhead",
+        "no registration fee", "do not pay", "background verification",
+    ]
+    hits = [p for p in positive_phrases if p in lower]
+    if hits:
+        gain = min(20, 4 + len(hits) * 2)
+        score += gain
+        notes.append(f"Legitimacy indicators found ({', '.join(hits[:5])}) -{gain}")
+
+    # Corporate email/domain consistency can lower risk a bit
+    domains = extract_domains(text)
+    tokens = [t for t in re.split(r"[^a-z0-9]+", (company_name or '').lower()) if len(t) >= 4]
+    if domains and tokens and any(any(t in d for t in tokens) for d in domains):
+        score += 8
+        notes.append("Shared domain appears consistent with company name -8")
+
+    # Presence of clear process details is usually safer
+    if any(k in lower for k in ["job description", "location", "ctc", "reporting manager", "notice period"]):
+        score += 5
+        notes.append("Detailed hiring process information present -5")
+
+    return min(score, 30), notes
+
+
 def check_phone_number(phone: str):
     """Improved heuristic phone fraud check."""
     digits = re.sub(r"\D", "", phone or "")
@@ -312,9 +344,9 @@ def analyze_files(uploaded_files):
     return score, notes, saved
 
 
-def combine_scores(text_score, phone_score, company_score, file_score):
+def combine_scores(text_score, phone_score, company_score, file_score, legitimacy_score):
     """Non-linear risk fusion: higher individual risk gets amplified."""
-    weighted_sum = (0.42 * text_score) + (0.24 * phone_score) + (0.30 * company_score) + (0.04 * file_score)
+    weighted_sum = (0.42 * text_score) + (0.24 * phone_score) + (0.30 * company_score) + (0.04 * file_score) - (0.28 * legitimacy_score)
 
     # Amplify if multiple major channels are high-risk.
     channels_high = sum(1 for s in [text_score, phone_score, company_score] if s >= 25)
@@ -432,13 +464,14 @@ def detect_scam():
     translated_text, translation_note = translate_to_english(merged_text)
 
     text_score, text_factors = analyze_text_signals(translated_text)
+    legitimacy_score, legitimacy_notes = analyze_legitimacy_signals(translated_text, company_name)
     phone_score, phone_reasons, phone_status = check_phone_number(phone_number)
     company_score, company_notes, company_status, sources = verify_company(
         company_name, company_address, translated_text
     )
     file_score, file_notes, saved_files = analyze_files(request.files.getlist("evidence_files"))
 
-    total_score = combine_scores(text_score, phone_score, company_score, file_score)
+    total_score = combine_scores(text_score, phone_score, company_score, file_score, legitimacy_score)
     confidence = estimate_confidence(translated_text, phone_number, len(saved_files))
     label = classify(total_score)
 
@@ -447,6 +480,7 @@ def detect_scam():
         f"Text signal risk: {round(text_score, 2)}/70",
         f"Phone signal risk: {round(phone_score, 2)}/45",
         f"Company verification risk: {round(company_score, 2)}/45",
+        f"Legitimacy offset: -{round(legitimacy_score, 2)}/30",
         f"Final fused risk score: {total_score}%",
         f"Analysis confidence (evidence sufficiency): {confidence}%",
         "Important: no automated detector can guarantee 100% accuracy; always perform manual verification.",
@@ -458,6 +492,8 @@ def detect_scam():
         reasoning.append("Phone findings: " + "; ".join(phone_reasons))
     if company_notes:
         reasoning.append("Company findings: " + "; ".join(company_notes))
+    if legitimacy_notes:
+        reasoning.append("Legitimacy findings: " + "; ".join(legitimacy_notes))
     reasoning.extend(file_notes)
 
     conn = get_db()
@@ -488,6 +524,7 @@ def detect_scam():
         "Text Risk": round(text_score, 2),
         "Phone Risk": round(phone_score, 2),
         "Company Risk": round(company_score, 2),
+        "Legitimacy Offset": -round(legitimacy_score, 2),
         "File Risk": round(file_score, 2),
     }
 
