@@ -1,8 +1,10 @@
+import math
 import os
 import re
 import sqlite3
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
 from flask import (
     Flask,
@@ -100,7 +102,6 @@ def translate_to_english(text: str):
         except Exception:
             language = "unknown"
 
-    # If translation dependency is unavailable, gracefully use original text.
     if GoogleTranslator is None:
         return text, f"Translation service unavailable; using original text (detected={language})."
 
@@ -111,61 +112,132 @@ def translate_to_english(text: str):
         return text, f"Translation failed; using original text (detected={language})."
 
 
+def normalize_text(text: str) -> str:
+    text = (text or "").lower()
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def extract_domains(text: str):
+    urls = re.findall(r"https?://[^\s]+", text)
+    domains = []
+    for url in urls:
+        try:
+            domains.append(urlparse(url).netloc.lower().replace("www.", ""))
+        except Exception:
+            pass
+
+    # Also catch raw domain patterns in text
+    raw = re.findall(r"\b([a-z0-9-]+\.(?:com|in|org|net|co|io|biz|info))\b", text)
+    domains.extend(raw)
+    return sorted(set([d for d in domains if d]))
+
+
 def analyze_text_signals(text: str):
-    """Simple NLP-style heuristic scoring using scam trigger keywords."""
-    lower = text.lower()
-    triggers = {
-        "payment": ["registration fee", "processing fee", "pay first", "deposit"],
-        "urgency": ["urgent", "immediately", "today only", "limited slots"],
-        "too_good": ["high salary", "easy money", "no interview", "guaranteed job"],
-        "off_platform": ["whatsapp only", "telegram", "personal number", "dm me"],
-        "identity_risk": ["aadhar", "passport", "bank details", "otp"],
+    """Weighted NLP-style heuristics with richer pattern coverage."""
+    lower = normalize_text(text)
+
+    weighted_phrases = {
+        "advance_fee": {
+            "weight": 22,
+            "patterns": [
+                "registration fee", "processing fee", "security deposit", "training fee",
+                "pay first", "payment before joining", "pay to confirm", "unrefundable",
+            ],
+        },
+        "urgency_pressure": {
+            "weight": 12,
+            "patterns": ["urgent", "immediately", "today only", "act now", "limited slots", "within 1 hour"],
+        },
+        "too_good_to_be_true": {
+            "weight": 16,
+            "patterns": ["high salary", "easy money", "guaranteed job", "no interview", "earn daily", "work 1 hour"],
+        },
+        "off_platform_or_private_channel": {
+            "weight": 12,
+            "patterns": ["whatsapp only", "telegram", "dm me", "personal number", "private chat"],
+        },
+        "sensitive_data_request": {
+            "weight": 16,
+            "patterns": ["otp", "bank details", "aadhar", "passport", "cvv", "upi pin"],
+        },
+        "threat_or_penalty": {
+            "weight": 12,
+            "patterns": ["account will be blocked", "penalty", "legal action", "last warning"],
+        },
     }
 
-    score = 0
+    score = 0.0
     factors = []
-    for factor, words in triggers.items():
-        matches = [w for w in words if w in lower]
-        if matches:
-            increment = min(18, 6 * len(matches))
+    for factor, config in weighted_phrases.items():
+        hits = [p for p in config["patterns"] if p in lower]
+        if hits:
+            increment = min(config["weight"], 6 + 4 * len(hits))
             score += increment
-            factors.append((factor, matches, increment))
+            factors.append((factor, hits, round(increment, 2)))
 
-    return min(score, 60), factors
+    # Structural markers
+    exclamations = text.count("!")
+    if exclamations >= 3:
+        score += 4
+        factors.append(("aggressive_punctuation", ["multiple exclamation marks"], 4))
+
+    caps_words = re.findall(r"\b[A-Z]{4,}\b", text)
+    if len(caps_words) >= 4:
+        score += 4
+        factors.append(("overuse_caps", ["multiple all-caps words"], 4))
+
+    # Suspicious contact patterns
+    personal_email_domains = {"gmail.com", "yahoo.com", "outlook.com", "hotmail.com", "proton.me", "protonmail.com"}
+    email_domains = re.findall(r"[a-zA-Z0-9._%+-]+@([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})", text)
+    if email_domains and any(d.lower() in personal_email_domains for d in email_domains):
+        score += 8
+        factors.append(("non_corporate_email", list(set(email_domains)), 8))
+
+    domains = extract_domains(text)
+    if any("bit.ly" in d or "tinyurl" in d for d in domains):
+        score += 10
+        factors.append(("shortened_links", domains, 10))
+
+    return min(score, 70), factors
 
 
 def check_phone_number(phone: str):
-    """Heuristic phone fraud check."""
+    """Improved heuristic phone fraud check."""
     digits = re.sub(r"\D", "", phone or "")
-    suspicious_patterns = {
-        "repeated_digit_pattern": bool(re.fullmatch(r"(\d)\1{7,}", digits)),
-        "very_short_or_long": len(digits) < 8 or len(digits) > 15,
-        "starts_with_unusual_prefix": digits.startswith("000") or digits.startswith("99999"),
-    }
-
-    known_reported = {
-        "1800123456", "9999999999", "1234567890", "0000000000"
-    }
 
     score = 0
     reasons = []
-    for key, is_bad in suspicious_patterns.items():
-        if is_bad:
-            score += 12
-            reasons.append(key.replace("_", " "))
+    if len(digits) < 8 or len(digits) > 15:
+        score += 16
+        reasons.append("Invalid international length")
 
-    if digits in known_reported:
-        score += 25
-        reasons.append("Found in frequently reported scam numbers")
+    if re.fullmatch(r"(\d)\1{7,}", digits or ""):
+        score += 18
+        reasons.append("Repeated digit pattern")
+
+    if digits in {"1234567890", "0000000000", "9999999999", "1111111111"}:
+        score += 20
+        reasons.append("Known frequently reported scam pattern")
+
+    # Detect sequential patterns like 12345678 or 987654321
+    if digits and (digits in "01234567890123456789" or digits in "98765432109876543210"):
+        score += 10
+        reasons.append("Sequential number pattern")
+
+    if digits.startswith("000") or digits.startswith("99999"):
+        score += 10
+        reasons.append("Unusual prefix")
 
     status = "Verified" if score < 20 else "Suspicious"
-    return min(score, 40), reasons, status
+    return min(score, 45), reasons, status
 
 
-def verify_company(company_name: str, company_address: str):
-    """Simulate external verification against LinkedIn/Maps/Glassdoor."""
+def verify_company(company_name: str, company_address: str, text: str):
+    """Simulated company verification with consistency checks across signals."""
     name = (company_name or "").strip()
     address = (company_address or "").strip()
+    merged_text = text or ""
 
     score = 0
     notes = []
@@ -174,17 +246,32 @@ def verify_company(company_name: str, company_address: str):
         score += 20
         notes.append("Company name too short/incomplete")
 
-    if any(bad in name.lower() for bad in ["crypto", "double income", "quick cash"]):
-        score += 18
-        notes.append("Name contains high-risk wording")
+    risky_tokens = ["crypto", "quick cash", "double income", "part time instant", "limited seat"]
+    if any(tok in name.lower() for tok in risky_tokens):
+        score += 14
+        notes.append("Company name contains high-risk wording")
 
-    if not address or len(address) < 8:
-        score += 10
-        notes.append("Company address seems incomplete")
+    if len(address) < 8:
+        score += 12
+        notes.append("Company address appears incomplete")
+
+    # Cross-check text domain branding against company name tokens.
+    domains = extract_domains(merged_text)
+    name_tokens = [t for t in re.split(r"[^a-z0-9]+", name.lower()) if len(t) >= 4]
+    if domains and name_tokens:
+        if not any(any(tok in domain for tok in name_tokens) for domain in domains):
+            score += 10
+            notes.append("Shared link domains do not resemble company name")
 
     linked_in = "Likely Found" if score < 18 else "Not Confident"
     google_maps = "Likely Found" if len(address) >= 8 else "Not Found"
     glassdoor = "Likely Found" if len(name) >= 4 else "Not Found"
+
+    # If two+ sources are weak, bump risk.
+    weak = sum(1 for s in [linked_in, google_maps, glassdoor] if s in {"Not Found", "Not Confident"})
+    if weak >= 2:
+        score += 8
+        notes.append("Multiple public-source verifications appear weak")
 
     verification = {
         "LinkedIn": linked_in,
@@ -192,7 +279,7 @@ def verify_company(company_name: str, company_address: str):
         "Glassdoor": glassdoor,
     }
     status = "Verified" if score < 20 else "Needs Review"
-    return min(score, 35), notes, status, verification
+    return min(score, 45), notes, status, verification
 
 
 def analyze_files(uploaded_files):
@@ -214,7 +301,7 @@ def analyze_files(uploaded_files):
 
         ext = filename.rsplit(".", 1)[1].lower()
         if ext in {"txt", "doc", "docx", "pdf"}:
-            notes.append(f"Document submitted: {filename}")
+            notes.append(f"Document evidence submitted: {filename}")
         if ext in {"png", "jpg", "jpeg", "webp", "gif"}:
             notes.append(f"Image evidence submitted: {filename}")
         if ext in {"mp3", "wav", "m4a", "ogg", "aac"}:
@@ -225,10 +312,35 @@ def analyze_files(uploaded_files):
     return score, notes, saved
 
 
+def combine_scores(text_score, phone_score, company_score, file_score):
+    """Non-linear risk fusion: higher individual risk gets amplified."""
+    weighted_sum = (0.42 * text_score) + (0.24 * phone_score) + (0.30 * company_score) + (0.04 * file_score)
+
+    # Amplify if multiple major channels are high-risk.
+    channels_high = sum(1 for s in [text_score, phone_score, company_score] if s >= 25)
+    if channels_high >= 2:
+        weighted_sum += 8
+
+    # Logistic squeeze to 0-100 for stable thresholds.
+    risk = 100 / (1 + math.exp(-0.08 * (weighted_sum - 28)))
+    return round(max(0, min(risk, 100)), 2)
+
+
+def estimate_confidence(text: str, phone: str, files_count: int):
+    """Confidence indicates evidence sufficiency, not guaranteed truth."""
+    evidence_points = 0
+    if len((text or "").strip()) >= 30:
+        evidence_points += 35
+    if len(re.sub(r"\D", "", phone or "")) >= 8:
+        evidence_points += 30
+    evidence_points += min(files_count * 15, 35)
+    return min(evidence_points, 95)
+
+
 def classify(score: float):
-    if score >= 70:
+    if score >= 75:
         return "Scam"
-    if score >= 40:
+    if score >= 45:
         return "Suspicious"
     return "Likely Genuine"
 
@@ -321,21 +433,27 @@ def detect_scam():
 
     text_score, text_factors = analyze_text_signals(translated_text)
     phone_score, phone_reasons, phone_status = check_phone_number(phone_number)
-    company_score, company_notes, company_status, sources = verify_company(company_name, company_address)
+    company_score, company_notes, company_status, sources = verify_company(
+        company_name, company_address, translated_text
+    )
     file_score, file_notes, saved_files = analyze_files(request.files.getlist("evidence_files"))
 
-    total_score = min(text_score + phone_score + company_score + file_score, 100)
+    total_score = combine_scores(text_score, phone_score, company_score, file_score)
+    confidence = estimate_confidence(translated_text, phone_number, len(saved_files))
     label = classify(total_score)
 
     reasoning = [
         f"Translation: {translation_note}",
-        f"Text signal score: {text_score}/60",
-        f"Phone signal score: {phone_score}/40",
-        f"Company verification score: {company_score}/35",
+        f"Text signal risk: {round(text_score, 2)}/70",
+        f"Phone signal risk: {round(phone_score, 2)}/45",
+        f"Company verification risk: {round(company_score, 2)}/45",
+        f"Final fused risk score: {total_score}%",
+        f"Analysis confidence (evidence sufficiency): {confidence}%",
+        "Important: no automated detector can guarantee 100% accuracy; always perform manual verification.",
     ]
     if text_factors:
         for factor, matches, increment in text_factors:
-            reasoning.append(f"Detected {factor} keywords ({', '.join(matches)}) +{increment}")
+            reasoning.append(f"Detected {factor} indicators ({', '.join(matches)}) +{increment}")
     if phone_reasons:
         reasoning.append("Phone findings: " + "; ".join(phone_reasons))
     if company_notes:
@@ -367,15 +485,16 @@ def detect_scam():
     conn.close()
 
     risk_factors = {
-        "Text Risk": text_score,
-        "Phone Risk": phone_score,
-        "Company Risk": company_score,
-        "File Risk": file_score,
+        "Text Risk": round(text_score, 2),
+        "Phone Risk": round(phone_score, 2),
+        "Company Risk": round(company_score, 2),
+        "File Risk": round(file_score, 2),
     }
 
     result = {
         "label": label,
         "score": round(total_score, 2),
+        "confidence": confidence,
         "explanation": reasoning,
         "risk_factors": risk_factors,
         "phone_status": phone_status,
